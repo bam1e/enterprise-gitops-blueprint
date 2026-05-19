@@ -1,0 +1,110 @@
+# .github/workflows/app-delivery.yml
+# Core application delivery orchestrator
+# Calls the enterprise CI engine for all application builds
+# Handles PR validation, branch builds and release tagging
+
+name: "🚀 Core App Delivery Pipeline"
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ── Validate Conventional Commits ─────────────────────────────────────────
+  commit-validation:
+    name: 📝 Validate Commit Messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: .commitlintrc.json
+
+  # ── IaC Security Scanning ─────────────────────────────────────────────────
+  iac-security:
+    name: 🔒 IaC Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: terraform/
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: false
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+
+  # ── Enterprise CI Engine ──────────────────────────────────────────────────
+  run-enterprise-ci:
+    name: ⚡ Trigger Architectural Guardrails
+    needs: [commit-validation, iac-security]
+    if: always() && !cancelled()
+    uses: ./.github/workflows/ci-engine.yml
+    with:
+      image_name: "secure-api"
+      environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+    secrets: inherit
+
+  # ── Automated Release ─────────────────────────────────────────────────────
+  release:
+    name: 📦 Automated Release (release-please)
+    runs-on: ubuntu-latest
+    needs: run-enterprise-ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Environment Promotion ─────────────────────────────────────────────────
+  promote-to-staging:
+    name: 🔄 Promote to Staging
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: staging
+      url: https://staging.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update Staging Image Tag
+        run: |
+          echo "Promoting ${{ needs.run-enterprise-ci.outputs.image_digest }} to staging"
+          # In real usage: update kustomize overlay or helm values
+
+  promote-to-production:
+    name: 🚀 Promote to Production
+    runs-on: ubuntu-latest
+    needs: promote-to-staging
+    environment:
+      name: production
+      url: https://app.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update Production Image Tag
+        run: |
+          echo "Promoting ${{ needs.run-enterprise-ci.outputs.image_digest }} to production"
+          # In real usage: update kustomize overlay or helm values

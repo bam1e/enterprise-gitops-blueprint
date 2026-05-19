@@ -1,0 +1,87 @@
+name: "🔍 PR Metadata Validator"
+description: "Composite action to validate PR metadata, extract version info, and enforce naming conventions"
+
+inputs:
+  pr_title:
+    description: "Pull request title to validate"
+    required: true
+  pr_number:
+    description: "Pull request number"
+    required: true
+  github_token:
+    description: "GitHub token for API calls"
+    required: true
+
+outputs:
+  version_bump:
+    description: "Detected version bump type (major, minor, patch)"
+    value: ${{ steps.parse.outputs.version_bump }}
+  is_breaking:
+    description: "Whether this PR contains breaking changes"
+    value: ${{ steps.parse.outputs.is_breaking }}
+  changelog_entry:
+    description: "Generated changelog entry"
+    value: ${{ steps.parse.outputs.changelog_entry }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: 🔎 Parse Conventional Commit from PR Title
+      id: parse
+      shell: bash
+      run: |
+        PR_TITLE="${{ inputs.pr_title }}"
+        echo "Validating PR title: $PR_TITLE"
+
+        # Check for breaking change
+        if echo "$PR_TITLE" | grep -qE "^.+!:|BREAKING CHANGE"; then
+          echo "version_bump=major" >> $GITHUB_OUTPUT
+          echo "is_breaking=true" >> $GITHUB_OUTPUT
+          echo "changelog_entry=💥 BREAKING: $PR_TITLE" >> $GITHUB_OUTPUT
+          echo "⚠️ Breaking change detected — major version bump required"
+
+        # Feature — minor bump
+        elif echo "$PR_TITLE" | grep -qE "^feat(\(.+\))?:"; then
+          echo "version_bump=minor" >> $GITHUB_OUTPUT
+          echo "is_breaking=false" >> $GITHUB_OUTPUT
+          echo "changelog_entry=✨ Feature: $PR_TITLE" >> $GITHUB_OUTPUT
+          echo "✅ Feature detected — minor version bump"
+
+        # Fix — patch bump
+        elif echo "$PR_TITLE" | grep -qE "^fix(\(.+\))?:|^perf(\(.+\))?:|^sec(\(.+\))?:"; then
+          echo "version_bump=patch" >> $GITHUB_OUTPUT
+          echo "is_breaking=false" >> $GITHUB_OUTPUT
+          echo "changelog_entry=🐛 Fix: $PR_TITLE" >> $GITHUB_OUTPUT
+          echo "✅ Fix detected — patch version bump"
+
+        # Docs, chore, ci — no version bump
+        elif echo "$PR_TITLE" | grep -qE "^(docs|chore|ci|test|refactor|style)(\(.+\))?:"; then
+          echo "version_bump=none" >> $GITHUB_OUTPUT
+          echo "is_breaking=false" >> $GITHUB_OUTPUT
+          echo "changelog_entry=🔧 Chore: $PR_TITLE" >> $GITHUB_OUTPUT
+          echo "✅ Non-version change detected"
+
+        # Invalid — fail
+        else
+          echo "❌ PR title does not follow Conventional Commits format"
+          echo "Expected: feat(scope): description"
+          echo "Got: $PR_TITLE"
+          exit 1
+        fi
+
+    - name: 💬 Post PR Comment with Validation Results
+      shell: bash
+      run: |
+        COMMENT="## 🤖 CI Engine Validation Results
+
+        | Check | Result |
+        |---|---|
+        | Conventional Commit | ✅ Valid |
+        | Version Bump | \`${{ steps.parse.outputs.version_bump }}\` |
+        | Breaking Change | \`${{ steps.parse.outputs.is_breaking }}\` |
+        | Changelog Entry | ${{ steps.parse.outputs.changelog_entry }} |"
+
+        gh pr comment ${{ inputs.pr_number }} --body "$COMMENT" --edit-last || \
+        gh pr comment ${{ inputs.pr_number }} --body "$COMMENT"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

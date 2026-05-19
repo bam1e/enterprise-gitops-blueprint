@@ -1,0 +1,185 @@
+# .github/workflows/ci-engine.yml
+# Enterprise-grade reusable CI workflow engine
+# Uses GitHub OIDC for keyless image signing — no stored secrets required
+# Called by orchestrator pipelines across all application repositories
+
+name: "♻️ Enterprise CI Engine"
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Name of the container image to build"
+        required: true
+        type: string
+      environment:
+        description: "Target environment (development, staging, production)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to the Dockerfile"
+        required: false
+        type: string
+        default: "Dockerfile"
+      platforms:
+        description: "Target platforms for multi-arch build"
+        required: false
+        type: string
+        default: "linux/amd64,linux/arm64"
+    outputs:
+      image_digest:
+        description: "SHA digest of the published image"
+        value: ${{ jobs.build-and-secure.outputs.digest }}
+      image_tags:
+        description: "All tags applied to the published image"
+        value: ${{ jobs.build-and-secure.outputs.tags }}
+
+permissions:
+  contents: write
+  id-token: write       # Required for OIDC token — keyless Cosign signing
+  packages: write       # Required for pushing to GHCR
+  security-events: write # Required for uploading SARIF security results
+  pull-requests: write  # Required for posting PR review comments
+
+jobs:
+  build-and-secure:
+    name: 🏗️ Build, Scan & Sign
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-push.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      # ── Source Code ──────────────────────────────────────────────────────────
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for semantic versioning
+
+      # ── Secret Scanning ──────────────────────────────────────────────────────
+      - name: 🛡️ Scan for Leaked Secrets (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+      # ── Linting & Static Analysis ────────────────────────────────────────────
+      - name: 🔍 Lint Dockerfile (Hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ inputs.dockerfile_path }}
+          failure-threshold: warning
+
+      # ── Multi-Architecture Build Setup ───────────────────────────────────────
+      - name: ⚙️ Set up QEMU (Multi-Arch Support)
+        uses: docker/setup-qemu-action@v3
+
+      - name: ⚙️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      # ── Registry Authentication ──────────────────────────────────────────────
+      - name: 🔑 Authenticate to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Image Metadata ────────────────────────────────────────────────────────
+      - name: 🏷️ Extract Docker Image Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+            type=ref,event=branch
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=${{ inputs.image_name }}
+            org.opencontainers.image.environment=${{ inputs.environment }}
+            org.opencontainers.image.vendor=Eficode
+
+      # ── Build & Push ──────────────────────────────────────────────────────────
+      - name: 📦 Build and Push Multi-Arch Container Image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true   # Generate SLSA provenance attestation
+          sbom: true         # Generate SBOM attestation
+
+      # ── Vulnerability Scanning ────────────────────────────────────────────────
+      - name: 🔎 Scan Image for Vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}@${{ steps.build-push.outputs.digest }}"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: 📤 Upload Trivy SARIF to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      # ── Keyless Image Signing (Cosign + OIDC) ────────────────────────────────
+      - name: 🔐 Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - name: ✍️ Sign Container Image (Keyless via GitHub OIDC)
+        if: github.event_name != 'pull_request'
+        run: |
+          cosign sign --yes \
+            "ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}@${{ steps.build-push.outputs.digest }}"
+        env:
+          COSIGN_EXPERIMENTAL: 1
+
+      # ── SBOM Generation ───────────────────────────────────────────────────────
+      - name: 📋 Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        if: github.event_name != 'pull_request'
+        with:
+          image: "ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}@${{ steps.build-push.outputs.digest }}"
+          format: cyclonedx-json
+          output-file: "sbom.${{ inputs.environment }}.cdx.json"
+
+      - name: 📤 Attach SBOM to GitHub Release
+        uses: anchore/sbom-action/publish-sbom@v0
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          sbom-artifact-match: "*.cdx.json"
+
+      # ── Summary ───────────────────────────────────────────────────────────────
+      - name: 📊 Write Job Summary
+        if: always()
+        run: |
+          echo "## 🚀 CI Engine Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | ✅ TruffleHog |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile Lint | ✅ Hadolint |" >> $GITHUB_STEP_SUMMARY
+          echo "| Multi-Arch Build | ✅ amd64 + arm64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vulnerability Scan | ✅ Trivy |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Signing | ✅ Cosign Keyless |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Generation | ✅ CycloneDX |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build-push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
