@@ -1,0 +1,38 @@
+# cluster-bootstrap/apps/root-app.yaml
+# The "App of Apps" pattern — this single Application tells ArgoCD
+# to manage all other Applications defined in this repository.
+# ArgoCD continuously reconciles the cluster state with Git.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/bam1e/enterprise-gitops-blueprint.git
+    targetRevision: HEAD
+    path: cluster-bootstrap/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true        # Remove resources deleted from Git
+      selfHeal: true     # Auto-correct manual changes (drift detection)
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

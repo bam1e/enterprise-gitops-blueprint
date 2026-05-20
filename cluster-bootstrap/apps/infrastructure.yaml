@@ -1,0 +1,33 @@
+# cluster-bootstrap/apps/infrastructure.yaml
+# Parent Application managing all infrastructure add-ons
+# Deploys cert-manager, ingress-nginx and monitoring stack
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infrastructure
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/bam1e/enterprise-gitops-blueprint.git
+    targetRevision: HEAD
+    path: cluster-bootstrap/infrastructure
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
