@@ -1,0 +1,44 @@
+# security-compliance/kyverno/verify-image-signatures.yaml
+# Kyverno ClusterPolicy — verifies Cosign image signatures
+# Only allows images signed with our GitHub OIDC keyless signing
+# Blocks unsigned or tampered images from running in the cluster
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Verify Image Signatures
+    policies.kyverno.io/category: Software Supply Chain Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >-
+      This policy verifies that all container images are signed
+      using Cosign keyless signing via GitHub Actions OIDC.
+      Unsigned images are blocked from deployment.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: verify-cosign-signature
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - production
+                - staging
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/bam1e/*"
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subject: "https://github.com/bam1e/enterprise-gitops-blueprint/.github/workflows/ci-engine.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+          mutateDigest: true
+          verifyDigest: true
+          required: true

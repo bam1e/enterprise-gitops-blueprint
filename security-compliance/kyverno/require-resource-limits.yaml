@@ -1,0 +1,46 @@
+# security-compliance/kyverno/require-resource-limits.yaml
+# Kyverno ClusterPolicy — enforces resource requests and limits
+# Prevents resource starvation and noisy neighbour problems
+# Every container must declare CPU and memory boundaries
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Resource limits and requests must be set on all containers.
+      This prevents a single pod from consuming all node resources.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-container-resources
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+      validate:
+        message: >-
+          CPU and memory requests and limits are required for all containers.
+          Add resources.requests and resources.limits to your container spec.
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"

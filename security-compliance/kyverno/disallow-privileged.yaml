@@ -1,0 +1,58 @@
+# security-compliance/kyverno/disallow-privileged.yaml
+# Kyverno ClusterPolicy — blocks privileged containers
+# Privileged containers have full access to the host — extreme risk
+# Also blocks hostPID, hostIPC and hostNetwork
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/category: Pod Security Standards
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >-
+      Privileged containers have nearly unrestricted host access.
+      This policy blocks privileged mode, hostPID, hostIPC and hostNetwork.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: block-privileged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+      validate:
+        message: >-
+          Privileged containers are not allowed. Remove
+          securityContext.privileged=true from your pod spec.
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"
+
+    - name: block-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          allowPrivilegeEscalation must be set to false.
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: "false"
