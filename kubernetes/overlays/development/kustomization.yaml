@@ -1,0 +1,31 @@
+# kubernetes/overlays/development/kustomization.yaml
+# Development overlay — minimal resources, debug logging, single replica
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: development
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: secure-api
+
+images:
+  - name: ghcr.io/bam1e/secure-api
+    newTag: develop
+
+commonLabels:
+  environment: development
+
+configMapGenerator:
+  - name: secure-api-config
+    literals:
+      - APP_ENV=development
+      - LOG_LEVEL=debug
+      - REPLICAS=1

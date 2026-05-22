@@ -1,0 +1,23 @@
+# kubernetes/overlays/development/deployment-patch.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-api
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: secure-api
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          env:
+            - name: APP_ENV
+              value: development
+            - name: LOG_LEVEL
+              value: debug

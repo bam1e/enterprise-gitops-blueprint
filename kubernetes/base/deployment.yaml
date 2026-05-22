@@ -1,0 +1,58 @@
+# kubernetes/base/deployment.yaml
+# Base deployment — environment-agnostic configuration
+# Overlays patch replicas, resources and image tags per environment
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secure-api
+  template:
+    metadata:
+      labels:
+        app: secure-api
+    spec:
+      serviceAccountName: secure-api-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: secure-api
+          image: ghcr.io/bam1e/secure-api:latest
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: APP_ENV
+              value: "base"
+            - name: LOG_LEVEL
+              value: "info"

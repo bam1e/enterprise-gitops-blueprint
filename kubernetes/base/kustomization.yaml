@@ -1,0 +1,23 @@
+# kubernetes/base/kustomization.yaml
+# Base layer — shared configuration across all environments
+# Overlays patch this base with environment-specific values
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: secure-api-base
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - serviceaccount.yaml
+  - hpa.yaml
+
+commonLabels:
+  app: secure-api
+  managed-by: kustomize
+
+commonAnnotations:
+  app.kubernetes.io/part-of: enterprise-gitops-blueprint
+  app.kubernetes.io/managed-by: argocd

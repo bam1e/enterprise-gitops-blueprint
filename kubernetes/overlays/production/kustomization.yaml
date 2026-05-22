@@ -1,0 +1,37 @@
+# kubernetes/overlays/production/kustomization.yaml
+# Production overlay — HA config, 3 replicas, warning logging only
+# Protected by GitHub Environment approval gates
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: production
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - poddisruptionbudget.yaml
+
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: secure-api
+  - path: hpa-patch.yaml
+    target:
+      kind: HorizontalPodAutoscaler
+      name: secure-api-hpa
+
+images:
+  - name: ghcr.io/bam1e/secure-api
+    newTag: "1.0.0"
+
+commonLabels:
+  environment: production
+
+configMapGenerator:
+  - name: secure-api-config
+    literals:
+      - APP_ENV=production
+      - LOG_LEVEL=warn
+      - REPLICAS=3
